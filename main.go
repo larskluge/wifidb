@@ -16,6 +16,7 @@ type Info struct {
 	Bssid    string
 	Auth     string
 	LinkAuth string
+	Isp      string
 	Password string
 }
 
@@ -39,6 +40,7 @@ func main() {
 		Bssid:    matches[3],
 		Auth:     matches[1],
 		LinkAuth: matches[2],
+		Isp:      Isp(),
 	}
 
 	// Password
