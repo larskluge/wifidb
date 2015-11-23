@@ -52,10 +52,11 @@ func main() {
 		}
 	}
 
+	str, err := yaml.Marshal(&data)
 	if err != nil {
 		log.Fatal("Error while marshalling: %v", err)
 		os.Exit(2)
 	} else {
-		fmt.Println(string(str))
+		fmt.Print(string(str))
 	}
 }
