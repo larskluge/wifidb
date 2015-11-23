@@ -9,9 +9,9 @@ import (
 func Password(data Info) (pass string) {
 	if data.Auth == "open" && data.LinkAuth == "none" {
 	} else {
-		pass, err := keyring.Get("AirPort", data.Ssid)
+		password, err := keyring.Get("AirPort", data.Ssid)
 		if err == nil {
-			data.Password = pass
+			pass = password
 		} else {
 			log.Fatal(err)
 		}
