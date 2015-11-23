@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"regexp"
 
+	"github.com/tmc/keyring"
 	"gopkg.in/yaml.v2"
 )
 
@@ -33,14 +34,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	thing := Info{
+	data := Info{
 		Ssid:     matches[4],
 		Bssid:    matches[3],
 		Auth:     matches[1],
 		LinkAuth: matches[2],
 	}
 
-	str, err := yaml.Marshal(&thing)
+	// Password
+	//
+	if data.Auth != "open" || data.LinkAuth != "none" {
+		pass, err := keyring.Get("AirPort", data.Ssid)
+		if err == nil {
+			data.Password = pass
+		} else {
+			log.Fatal(err)
+		}
+	}
+
 	if err != nil {
 		log.Fatal("Error while marshalling: %v", err)
 		os.Exit(2)
