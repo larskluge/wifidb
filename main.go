@@ -28,6 +28,7 @@ func main() {
 		log.Fatal("Error while marshalling: %v", err)
 		os.Exit(2)
 	} else {
+		fmt.Printf("# Wifi %s\n\n\n\n", data.Ssid)
 		fmt.Print(string(str))
 	}
 }
