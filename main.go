@@ -9,12 +9,15 @@ import (
 )
 
 type Info struct {
-	Ssid     string
-	Bssid    string
-	Auth     string
-	LinkAuth string
-	Password string
-	Isp      string
+	Ssid        string
+	Bssid       string
+	Auth        string
+	LinkAuth    string
+	Password    string
+	Isp         string
+	City        string
+	Country     string
+	CountryCode string
 }
 
 func main() {
@@ -22,6 +25,7 @@ func main() {
 	Airport(&data)
 	data.Password = Password(data)
 	data.Isp = Isp()
+	Location(&data)
 
 	str, err := yaml.Marshal(&data)
 	if err != nil {
