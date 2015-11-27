@@ -21,11 +21,17 @@ type Info struct {
 }
 
 func main() {
+	finished := make(chan bool)
+
 	data := Info{}
 	Airport(&data)
+	go func() {
+		Location(&data)
+		finished <- true
+	}()
 	data.Password = Password(data)
-	data.Isp = Isp()
-	Location(&data)
+
+	<-finished
 
 	str, err := yaml.Marshal(&data)
 	if err != nil {
