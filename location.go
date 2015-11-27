@@ -11,7 +11,7 @@ type Response struct {
 	City        string // seems unprecise
 	Country     string
 	CountryCode string
-	// Isp string // as alternative?
+	Isp         string
 	// Timezone string // e.g. Asia/Ho_Chi_Minh
 }
 
@@ -29,6 +29,7 @@ func Location(data *Info) {
 	resp := Response{}
 	err := getJson("http://ip-api.com/json", &resp)
 	if err == nil && resp.Status == "success" {
+		data.Isp = resp.Isp
 		data.City = resp.City
 		data.Country = resp.Country
 		data.CountryCode = resp.CountryCode
