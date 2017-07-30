@@ -21,7 +21,7 @@ type Info struct {
 }
 
 func main() {
-	done := make(chan bool, 1)
+	done := make(chan bool)
 
 	data := Info{}
 	Airport(&data)
