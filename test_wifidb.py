@@ -145,6 +145,20 @@ def test_nearest_candidate_beats_relevance_order():
     assert best["name"] == "7 Seas Bistro"
 
 
+def test_rank_candidates_dedupes_and_sorts():
+    fix = (38.706684, -9.421122)
+    a = [{"name": "Far Cafe", "lat": 38.7020387, "lon": -9.4219057},
+         {"name": "7 Seas Bistro", "lat": 38.7066857, "lon": -9.4210818}]
+    b = [{"name": "7 Seas Bistro", "lat": 38.7066857, "lon": -9.4210818},  # dup loc
+         {"name": "Mid", "lat": 38.7078644, "lon": -9.4194233}]
+    out = wifidb.rank_candidates(*fix, [a, b], limit=10)
+    names = [c["name"] for c in out]
+    assert names[0] == "7 Seas Bistro"        # nearest first
+    assert names.count("7 Seas Bistro") == 1   # deduped across lists
+    assert out[0]["dist"] < 10
+    assert len(out) == 3
+
+
 def test_parse_wifi():
     out = "  SSID : CoffeeWiFi\n  BSSID : aa:bb:cc:dd:ee:ff\n  MTU : 1500\n"
     w = wifidb.parse_wifi(out)
@@ -161,6 +175,13 @@ def test_parse_wifi_bssid_not_read_as_ssid():
 def test_parse_wifi_empty():
     w = wifidb.parse_wifi("")
     assert w == {"ssid": None, "bssid": None}
+
+
+def test_parse_wifi_redacted_is_none():
+    # macOS withholds SSID/BSSID from unprivileged processes as "<redacted>".
+    w = wifidb.parse_wifi("  SSID : <redacted>\n  BSSID : <redacted>\n")
+    assert w["ssid"] is None
+    assert w["bssid"] is None
 
 
 def test_parse_ipinfo():

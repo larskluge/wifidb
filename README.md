@@ -19,11 +19,10 @@ Location Services).
 ## Usage
 
 ```sh
-./wifidb                   # list, one entry per Wi-Fi/location (default)
+./wifidb                   # list, one entry per location (default)
 ./wifidb ls --raw          # individual measurements instead of grouped
-./wifidb record            # speedtest + location → new row (no browser)
-./wifidb resolve --last    # name the latest spot via Google Maps
-./wifidb resolve --all     # name every pending spot
+./wifidb record            # speedtest + location, then pick the place
+./wifidb resolve --last    # (re-)name a row non-interactively (auto-nearest)
 ./wifidb map --last        # open the latest spot's pin in Google Maps
 ./wifidb stats             # average speeds grouped by place
 ```
@@ -33,22 +32,27 @@ Put `~/code/wifidb` on your PATH (or symlink `wifidb`) to run it anywhere.
 ## How it works
 
 - **record** — `speedtest -f json` for bandwidth/latency, one `CoreLocationCLI`
-  call for coords + accuracy + reverse-geocoded street (offline, no browser),
-  and an `ipinfo.io` lookup of the external IP to record whether a VPN was
-  active (`is_vpn`) and **where the connection exited** (`exit_loc` +
-  coordinates). It also captures the Wi-Fi `ssid`/`bssid`
-  (`ipconfig getsummary en0`). `place` is left pending.
-- **list** — aggregates measurements into **one entry per Wi-Fi access point**
-  (`bssid`), showing count, avg/best speeds, ping range, and the VPN split
-  (e.g. `1/2` = one of two runs on VPN). Rows recorded before BSSID capture, or
-  on a network macOS won't disclose, appear individually as `(no wifi)`. Use
-  `--raw` for the full per-measurement table.
-- **resolve** — drives `agent-browser` → Google Maps centered on the row's
-  coords, reads every result's coordinates from its place-link href, and picks
-  the venue **nearest** the fix (not Google's top relevance-ranked result).
-  Dismisses the EU cookie-consent wall automatically. Defaults to the `cafe`
-  category; override with `--query` (e.g. `resolve --last --query restaurant`)
-  when the venue isn't a café.
+  call for coords + accuracy + reverse-geocoded street (offline), and an
+  `ipinfo.io` lookup of the external IP to record whether a VPN was active
+  (`is_vpn`) and **where the connection exited** (`exit_loc` + coordinates).
+  The row is written immediately, then it fetches the ~10 nearest venues from
+  Google Maps (merging `cafe` + `restaurant`) and shows an **arrow-key picker**
+  with the nearest pre-selected — ↑/↓ to move, Enter to confirm, or type a name
+  for a custom entry. Your choice updates the row. Non-interactive runs (piped)
+  auto-pick the nearest. Nothing is lost if you skip the picker — name it later
+  with `resolve`.
+- **list** — aggregates into **one entry per location**, keyed by place name
+  (falling back to BSSID, then a GPS cell). Shows count, avg/best speeds, ping
+  range, and the VPN split (e.g. `4/5` = four of five runs on VPN). `--raw` for
+  the full per-measurement table.
+- **resolve** `[--last|--all|<id>]` — names rows non-interactively by picking
+  the venue **nearest** the fix from Google Maps. Mainly for backfilling rows
+  recorded when the picker was skipped/unavailable. `--query <cat>` overrides
+  the default `cafe`+`restaurant` search.
+
+Note: macOS only discloses the Wi-Fi `ssid`/`bssid` to processes authorized for
+Location Services, so an unprivileged CLI gets `<redacted>` — those are stored
+as NULL. Grouping therefore relies on the resolved place name, not the network.
 
 Speed is stored in Mbps (`bandwidth * 8 / 1e6`). The full speedtest JSON is
 kept in `raw_json` for forensics. The DB lives at `wifi.db` (gitignored);
@@ -56,9 +60,9 @@ override with `WIFIDB_DB=/path/to.db`.
 
 ### Known limitation
 
-The venue still has to appear in the chosen search category. A pure restaurant
-won't surface under `--query cafe`; rerun with `--query restaurant`. Distance
-ranking then picks the closest match.
+The right venue has to appear in the Google Maps search. `record` merges
+`cafe` + `restaurant` to cover most spots, but an unusual venue type might be
+missing from the list — just type its name in the picker instead.
 
 ## Tests
 

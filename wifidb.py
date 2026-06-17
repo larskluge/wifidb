@@ -167,7 +167,11 @@ def parse_wifi(text):
             bssid = m.group(1)
 
     def clean(v):
-        return v if v and v.lower() not in ("none", "<none>") else None
+        # macOS returns "<redacted>" unless the process has Location Services
+        # authorization, so drop placeholders rather than store/group on them.
+        if not v or v.lower() in ("none", "<none>") or "redact" in v.lower():
+            return None
+        return v
 
     return {"ssid": clean(ssid), "bssid": clean(bssid)}
 
@@ -372,48 +376,130 @@ def _ab(*args):
     return proc.stdout.strip()
 
 
-def resolve_place(lat, lon, query="cafe", settle=3.0):
-    """Drive Google Maps to find the venue NEAREST the coords.
+def rank_candidates(lat, lon, candidate_lists, limit=10):
+    """Merge candidate lists, dedupe by location, sort by distance to the fix."""
+    by_key = {}
+    for lst in candidate_lists:
+        for c in lst:
+            key = (round(c["lat"], 6), round(c["lon"], 6))
+            if key in by_key:
+                continue
+            by_key[key] = {**c, "dist": round(haversine(lat, lon, c["lat"], c["lon"]))}
+    return sorted(by_key.values(), key=lambda c: c["dist"])[:limit]
 
-    Searches a broad category (so cafés, bistros, etc. all appear), then ranks
-    candidates by real distance to the fix — not Google's relevance order.
-    Returns {place, place_lat, place_lon, address, distance_m} or None.
+
+def fetch_candidates(lat, lon, queries=("cafe", "restaurant"), settle=3.0, limit=10):
+    """Search Google Maps across categories near the fix; return nearest venues.
+
+    Coordinates are read straight from each result's place-link href, so the
+    whole candidate set comes from snapshots — no per-result clicking. Multiple
+    categories are merged so cafés, bistros and restaurants all surface.
     """
-    url = f"https://www.google.com/maps/search/{query}/@{lat},{lon},18z"
-    _ab("open", url)
-    time.sleep(settle)
-    snap = _ab("snapshot", "-i", "-u")
-    cur_url = _ab("get", "url")
-    if "consent.google.com" in cur_url or find_ref(snap, ["Rejeitar tudo", "Reject all"]):
-        ref = find_ref(snap, ["Rejeitar tudo", "Reject all", "Aceitar tudo", "Accept all"])
-        if ref:
-            _ab("click", ref)
-            time.sleep(settle)
-            _ab("wait", "--load", "networkidle")
+    lists = []
+    for i, q in enumerate(queries):
+        url = f"https://www.google.com/maps/search/{q}/@{lat},{lon},18z"
         _ab("open", url)
         time.sleep(settle)
-        _ab("wait", "--load", "networkidle")
         snap = _ab("snapshot", "-i", "-u")
+        if i == 0 and ("consent.google.com" in _ab("get", "url")
+                       or find_ref(snap, ["Rejeitar tudo", "Reject all"])):
+            ref = find_ref(snap, ["Rejeitar tudo", "Reject all",
+                                  "Aceitar tudo", "Accept all"])
+            if ref:
+                _ab("click", ref)
+                time.sleep(settle)
+                _ab("wait", "--load", "networkidle")
+            _ab("open", url)
+            time.sleep(settle)
+            _ab("wait", "--load", "networkidle")
+            snap = _ab("snapshot", "-i", "-u")
+        lists.append(parse_search_candidates(snap))
+    return rank_candidates(lat, lon, lists, limit=limit)
 
-    best = nearest_candidate(lat, lon, parse_search_candidates(snap))
-    if not best:
+
+def resolve_place(lat, lon, queries=("cafe", "restaurant")):
+    """Auto-pick the venue nearest the coords (non-interactive)."""
+    cands = fetch_candidates(lat, lon, queries=queries)
+    if not cands:
         return None
-    addr = None
-    if best.get("ref"):
-        _ab("click", best["ref"])
-        time.sleep(settle)
-        _ab("wait", "--load", "networkidle")
-        plat, plon = parse_place_coords(_ab("get", "url"))
-        if plat is not None:
-            best["lat"], best["lon"] = plat, plon
-        addr = parse_place_address(_ab("snapshot", "-i", "-c"))
+    best = cands[0]
     return {
-        "place": best["name"],
-        "place_lat": best["lat"],
-        "place_lon": best["lon"],
-        "address": addr,
-        "distance_m": round(haversine(lat, lon, best["lat"], best["lon"])),
+        "place": best["name"], "place_lat": best["lat"], "place_lon": best["lon"],
+        "address": None, "distance_m": best["dist"],
     }
+
+
+def _fmt_candidate(c, width=30):
+    dist = c.get("dist")
+    dtxt = f"{dist} m" if dist is not None else ""
+    return f"{c['name'][:width]:<{width}} {dtxt:>8}"
+
+
+def _render_candidates(candidates, idx, typed):
+    w = sys.stdout
+    if typed:
+        w.write(f"\x1b[2KWhere are you?  name: {typed}█  "
+                "(Enter = use typed · Backspace = edit)\r\n")
+    else:
+        w.write("\x1b[2KWhere are you?  ↑/↓ move · Enter confirm · "
+                "or type a name\r\n")
+    for i, c in enumerate(candidates):
+        marker = "❯" if (i == idx and not typed) else " "
+        w.write(f"\x1b[2K {marker} {_fmt_candidate(c)}\r\n")
+    w.flush()
+
+
+def select_place(candidates, default_idx=0):
+    """Arrow-key picker over nearby places.
+
+    Returns the chosen candidate dict, a {'name','lat','lon'} dict for a typed
+    custom name, or None if aborted. When not attached to a TTY, prints the list
+    and auto-selects the default (nearest) so non-interactive runs still name it.
+    """
+    if not candidates:
+        return None
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("Nearby places (auto-selecting nearest — run in a terminal to pick):")
+        for i, c in enumerate(candidates):
+            print(f"  {i + 1:>2}. {_fmt_candidate(c)} {'<- default' if i == default_idx else ''}")
+        return candidates[default_idx]
+
+    import termios
+    import tty
+    idx, typed, first = default_idx, "", True
+    nlines = len(candidates) + 1
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            if not first:
+                sys.stdout.write(f"\x1b[{nlines}A")
+            first = False
+            _render_candidates(candidates, idx, typed)
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"):
+                if typed.strip():
+                    return {"name": typed.strip(), "lat": None, "lon": None}
+                return candidates[idx]
+            if ch == "\x03":              # Ctrl-C
+                return None
+            if ch == "\x1b":              # arrow keys / bare ESC
+                seq = sys.stdin.read(2)
+                if seq == "[A" and not typed:
+                    idx = (idx - 1) % len(candidates)
+                elif seq == "[B" and not typed:
+                    idx = (idx + 1) % len(candidates)
+                elif seq not in ("[A", "[B"):
+                    return None           # bare ESC aborts
+            elif ch in ("\x7f", "\b"):    # backspace
+                typed = typed[:-1]
+            elif ch.isprintable():
+                typed += ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
 
 
 # --------------------------------------------------------------------------- #
@@ -430,15 +516,41 @@ def cmd_record(args):
     if row.get("ext_ip"):
         row.update(geolocate_ip(row["ext_ip"]))
     row.update(get_wifi())
-    rid = insert_record(conn, row)
-    _print_rows(conn, where="id = ?", params=(rid,))
+    rid = insert_record(conn, row)  # write immediately — never lose the data
     coords = (
         f"{row['lat']:.6f},{row['lon']:.6f}" if row["lat"] is not None else "n/a"
     )
     sys.stderr.write(
-        f"\nrecorded #{rid} — {row['download_mbps']}↓/{row['upload_mbps']}↑ Mbps "
-        f"@ {coords}\nrun `wifidb resolve --last` to name the place.\n"
+        f"recorded #{rid} — {row['download_mbps']}↓/{row['upload_mbps']}↑ Mbps "
+        f"@ {coords}\n"
     )
+
+    # Name the spot inline: fetch nearby places, let the user pick, update the row.
+    if row["lat"] is not None:
+        try:
+            cands = fetch_candidates(row["lat"], row["lon"])
+        except Exception as e:  # noqa: BLE001 - enrichment, must not lose the row
+            cands = []
+            sys.stderr.write(f"(couldn't fetch nearby places: {e})\n")
+        finally:
+            _ab("close", "--all")
+        choice = None
+        if cands:
+            try:
+                choice = select_place(cands)
+            except Exception as e:  # noqa: BLE001 - picker must never lose the row
+                sys.stderr.write(f"(picker failed: {e}; name left unset)\n")
+        else:
+            sys.stderr.write("no nearby places found — name left unset.\n")
+        if choice:
+            conn.execute(
+                "UPDATE records SET place=?, place_lat=?, place_lon=? WHERE id=?",
+                (choice["name"], choice.get("lat"), choice.get("lon"), rid),
+            )
+            conn.commit()
+            sys.stderr.write(f"#{rid}: → {choice['name']}\n")
+
+    _print_rows(conn, where="id = ?", params=(rid,))
     return 0
 
 
@@ -464,8 +576,9 @@ def cmd_resolve(args):
             sys.stderr.write(f"#{rid}: no coordinates, skipping.\n")
             continue
         sys.stderr.write(f"#{rid}: resolving via Google Maps…\n")
+        qs = (args.query,) if getattr(args, "query", None) else ("cafe", "restaurant")
         try:
-            res = resolve_place(row["lat"], row["lon"], query=getattr(args, "query", "cafe"))
+            res = resolve_place(row["lat"], row["lon"], queries=qs)
         except Exception as e:  # noqa: BLE001 - best-effort browser step
             sys.stderr.write(f"#{rid}: resolve error: {e}\n")
             continue
@@ -533,7 +646,8 @@ def cmd_stats(args):
 
 
 def _print_groups(conn, limit=15):
-    """One aggregated entry per Wi-Fi (BSSID). Rows without a BSSID stand alone."""
+    """One aggregated entry per location: by place name, else Wi-Fi BSSID, else
+    a coarse GPS cell. So all measurements at a named spot collapse together."""
     rows = conn.execute(
         """
         SELECT MAX(bssid) bssid, MAX(ssid) ssid, COUNT(*) n,
@@ -543,7 +657,8 @@ def _print_groups(conn, limit=15):
                ROUND(MIN(ping_ms)) ping_min, ROUND(MAX(ping_ms)) ping_max,
                SUM(is_vpn) vpn_n, MAX(ts) last_ts
         FROM records
-        GROUP BY COALESCE(bssid, 'row:' || id)
+        GROUP BY COALESCE(NULLIF(place, ''), bssid,
+                          'gps:' || ROUND(lat, 4) || ',' || ROUND(lon, 4))
         ORDER BY last_ts DESC LIMIT ?
         """,
         (limit,),
@@ -551,16 +666,15 @@ def _print_groups(conn, limit=15):
     if not rows:
         print("(no records)")
         return
-    print(f"{'place':<24} {'ssid':<14} {'n':>2} {'↓avg':>6} {'↓best':>6} "
+    print(f"{'place':<30} {'n':>2} {'↓avg':>6} {'↓best':>6} "
           f"{'↑avg':>6} {'ping':>9} {'vpn':>5} {'last':<11}")
     for r in rows:
         place = r["place"] or r["address"] or "(pending)"
-        ssid = r["ssid"] or ("—" if r["bssid"] else "(no wifi)")
         pmin, pmax = r["ping_min"] or 0, r["ping_max"] or 0
         ping = f"{pmin:.0f}" if pmin == pmax else f"{pmin:.0f}–{pmax:.0f}"
         vpn = f"{r['vpn_n']}/{r['n']}"
         last = (r["last_ts"] or "")[5:16].replace("T", " ")
-        print(f"{place[:24]:<24} {ssid[:14]:<14} {r['n']:>2} "
+        print(f"{place[:30]:<30} {r['n']:>2} "
               f"{r['dl_avg'] or 0:>6} {r['dl_best'] or 0:>6} {r['ul_avg'] or 0:>6} "
               f"{ping:>9} {vpn:>5} {last:<11}")
 
@@ -595,8 +709,8 @@ def build_parser():
     rs.add_argument("id", nargs="?", type=int, help="record id")
     rs.add_argument("--last", action="store_true", help="resolve the latest record (default)")
     rs.add_argument("--all", action="store_true", help="resolve all pending records")
-    rs.add_argument("--query", default="cafe",
-                    help="Google Maps search category (default: cafe; try 'restaurant')")
+    rs.add_argument("--query", default=None,
+                    help="single Google Maps category to search (default: cafe + restaurant)")
     ls = sub.add_parser("list", aliases=["ls"], help="show records grouped by Wi-Fi")
     ls.add_argument("-n", type=int, default=15, help="how many rows/groups")
     ls.add_argument("--raw", action="store_true",
