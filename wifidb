@@ -1,0 +1,13 @@
+#!/bin/sh
+# Resolve symlinks so the wrapper works when linked onto PATH (e.g. ~/bin).
+src="$0"
+while [ -h "$src" ]; do
+    dir=$(cd -P "$(dirname "$src")" && pwd)
+    src=$(readlink "$src")
+    case "$src" in
+        /*) ;;
+        *) src="$dir/$src" ;;
+    esac
+done
+dir=$(cd -P "$(dirname "$src")" && pwd)
+exec python3 "$dir/wifidb.py" "$@"
