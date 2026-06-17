@@ -19,8 +19,8 @@ Location Services).
 ## Usage
 
 ```sh
-./wifidb                   # list recent records (default)
-./wifidb ls                # alias for list
+./wifidb                   # list, one entry per Wi-Fi/location (default)
+./wifidb ls --raw          # individual measurements instead of grouped
 ./wifidb record            # speedtest + location → new row (no browser)
 ./wifidb resolve --last    # name the latest spot via Google Maps
 ./wifidb resolve --all     # name every pending spot
@@ -36,7 +36,13 @@ Put `~/code/wifidb` on your PATH (or symlink `wifidb`) to run it anywhere.
   call for coords + accuracy + reverse-geocoded street (offline, no browser),
   and an `ipinfo.io` lookup of the external IP to record whether a VPN was
   active (`is_vpn`) and **where the connection exited** (`exit_loc` +
-  coordinates). `place` is left pending.
+  coordinates). It also captures the Wi-Fi `ssid`/`bssid`
+  (`ipconfig getsummary en0`). `place` is left pending.
+- **list** — aggregates measurements into **one entry per Wi-Fi access point**
+  (`bssid`), showing count, avg/best speeds, ping range, and the VPN split
+  (e.g. `1/2` = one of two runs on VPN). Rows recorded before BSSID capture, or
+  on a network macOS won't disclose, appear individually as `(no wifi)`. Use
+  `--raw` for the full per-measurement table.
 - **resolve** — drives `agent-browser` → Google Maps centered on the row's
   coords, reads every result's coordinates from its place-link href, and picks
   the venue **nearest** the fix (not Google's top relevance-ranked result).
@@ -45,7 +51,7 @@ Put `~/code/wifidb` on your PATH (or symlink `wifidb`) to run it anywhere.
   when the venue isn't a café.
 
 Speed is stored in Mbps (`bandwidth * 8 / 1e6`). The full speedtest JSON is
-kept in `raw_json` for forensics. The DB lives at `wifidb.db` (gitignored);
+kept in `raw_json` for forensics. The DB lives at `wifi.db` (gitignored);
 override with `WIFIDB_DB=/path/to.db`.
 
 ### Known limitation

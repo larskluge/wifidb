@@ -17,7 +17,7 @@ Google Maps, since free/OSM data misses independent venues.
 ## Layout (`~/code/wifidb/`)
 - `wifidb.py` — single-file CLI (argparse subcommands)
 - `wifidb` — wrapper (`exec python3 .../wifidb.py "$@"`), executable
-- `wifidb.db` — SQLite store (gitignored)
+- `wifi.db` — SQLite store (gitignored)
 - `test_wifidb.py` — pytest for pure parsing + DB logic (external calls mocked)
 - `README.md`, `.gitignore`
 

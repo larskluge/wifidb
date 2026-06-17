@@ -20,7 +20,7 @@ import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("WIFIDB_DB", os.path.join(HERE, "wifidb.db"))
+DB_PATH = os.environ.get("WIFIDB_DB", os.path.join(HERE, "wifi.db"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS records (
@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS records (
     lon           REAL,
     accuracy      REAL,
     address       TEXT,
+    ssid          TEXT,
+    bssid         TEXT,
     place         TEXT,
     place_lat     REAL,
     place_lon     REAL,
@@ -51,10 +53,14 @@ CREATE TABLE IF NOT EXISTS records (
 """
 
 # Columns added after the initial release; applied to existing DBs via _migrate.
-_ADDED_COLUMNS = [("exit_loc", "TEXT"), ("exit_lat", "REAL"), ("exit_lon", "REAL")]
+_ADDED_COLUMNS = [
+    ("exit_loc", "TEXT"), ("exit_lat", "REAL"), ("exit_lon", "REAL"),
+    ("ssid", "TEXT"), ("bssid", "TEXT"),
+]
 
 COLUMNS = [
-    "ts", "lat", "lon", "accuracy", "address", "place", "place_lat", "place_lon",
+    "ts", "lat", "lon", "accuracy", "address", "ssid", "bssid",
+    "place", "place_lat", "place_lon",
     "download_mbps", "upload_mbps", "ping_ms", "jitter_ms", "loss_pct",
     "isp", "is_vpn", "ext_ip", "exit_loc", "exit_lat", "exit_lon",
     "server", "result_url", "raw_json",
@@ -142,6 +148,28 @@ def parse_ipinfo(j):
         except ValueError:
             pass
     return {"exit_loc": label or None, "exit_lat": lat, "exit_lon": lon}
+
+
+def parse_wifi(text):
+    """Parse SSID/BSSID from `ipconfig getsummary <iface>` output.
+
+    The BSSID (access-point MAC) is the grouping key for "same Wi-Fi". macOS
+    only fills these when Location Services is authorized.
+    """
+    ssid = bssid = None
+    for line in (text or "").splitlines():
+        m = re.match(r"\s*SSID\s*:\s*(.+?)\s*$", line)
+        if m:
+            ssid = m.group(1)
+            continue
+        m = re.match(r"\s*BSSID\s*:\s*(.+?)\s*$", line)
+        if m:
+            bssid = m.group(1)
+
+    def clean(v):
+        return v if v and v.lower() not in ("none", "<none>") else None
+
+    return {"ssid": clean(ssid), "bssid": clean(bssid)}
 
 
 def parse_location(out):
@@ -327,6 +355,15 @@ def geolocate_ip(ip, timeout=8):
         return {}
 
 
+def get_wifi(iface="en0"):
+    proc = subprocess.run(
+        ["ipconfig", "getsummary", iface], capture_output=True, text=True
+    )
+    if proc.returncode != 0:
+        return {"ssid": None, "bssid": None}
+    return parse_wifi(proc.stdout)
+
+
 def _ab(*args):
     """Run an agent-browser command, return stdout (stripped)."""
     proc = subprocess.run(
@@ -392,6 +429,7 @@ def cmd_record(args):
     row["place"] = None
     if row.get("ext_ip"):
         row.update(geolocate_ip(row["ext_ip"]))
+    row.update(get_wifi())
     rid = insert_record(conn, row)
     _print_rows(conn, where="id = ?", params=(rid,))
     coords = (
@@ -448,7 +486,10 @@ def cmd_resolve(args):
 
 def cmd_list(args):
     conn = db_connect()
-    _print_rows(conn, limit=getattr(args, "n", 15))
+    if getattr(args, "raw", False):
+        _print_rows(conn, limit=getattr(args, "n", 15))
+    else:
+        _print_groups(conn, limit=getattr(args, "n", 15))
     return 0
 
 
@@ -491,6 +532,39 @@ def cmd_stats(args):
     return 0
 
 
+def _print_groups(conn, limit=15):
+    """One aggregated entry per Wi-Fi (BSSID). Rows without a BSSID stand alone."""
+    rows = conn.execute(
+        """
+        SELECT MAX(bssid) bssid, MAX(ssid) ssid, COUNT(*) n,
+               MAX(place) place, MAX(address) address,
+               ROUND(AVG(download_mbps),1) dl_avg, ROUND(MAX(download_mbps),1) dl_best,
+               ROUND(AVG(upload_mbps),1) ul_avg,
+               ROUND(MIN(ping_ms)) ping_min, ROUND(MAX(ping_ms)) ping_max,
+               SUM(is_vpn) vpn_n, MAX(ts) last_ts
+        FROM records
+        GROUP BY COALESCE(bssid, 'row:' || id)
+        ORDER BY last_ts DESC LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    if not rows:
+        print("(no records)")
+        return
+    print(f"{'place':<24} {'ssid':<14} {'n':>2} {'↓avg':>6} {'↓best':>6} "
+          f"{'↑avg':>6} {'ping':>9} {'vpn':>5} {'last':<11}")
+    for r in rows:
+        place = r["place"] or r["address"] or "(pending)"
+        ssid = r["ssid"] or ("—" if r["bssid"] else "(no wifi)")
+        pmin, pmax = r["ping_min"] or 0, r["ping_max"] or 0
+        ping = f"{pmin:.0f}" if pmin == pmax else f"{pmin:.0f}–{pmax:.0f}"
+        vpn = f"{r['vpn_n']}/{r['n']}"
+        last = (r["last_ts"] or "")[5:16].replace("T", " ")
+        print(f"{place[:24]:<24} {ssid[:14]:<14} {r['n']:>2} "
+              f"{r['dl_avg'] or 0:>6} {r['dl_best'] or 0:>6} {r['ul_avg'] or 0:>6} "
+              f"{ping:>9} {vpn:>5} {last:<11}")
+
+
 def _print_rows(conn, where="1=1", params=(), limit=15):
     sql = (
         "SELECT id, ts, place, address, lat, lon, download_mbps, upload_mbps, "
@@ -523,8 +597,10 @@ def build_parser():
     rs.add_argument("--all", action="store_true", help="resolve all pending records")
     rs.add_argument("--query", default="cafe",
                     help="Google Maps search category (default: cafe; try 'restaurant')")
-    ls = sub.add_parser("list", aliases=["ls"], help="show recent records")
-    ls.add_argument("-n", type=int, default=15, help="how many rows")
+    ls = sub.add_parser("list", aliases=["ls"], help="show records grouped by Wi-Fi")
+    ls.add_argument("-n", type=int, default=15, help="how many rows/groups")
+    ls.add_argument("--raw", action="store_true",
+                    help="show individual measurements instead of grouping by Wi-Fi")
     mp = sub.add_parser("map", help="open a record's location in Google Maps")
     mp.add_argument("id", nargs="?", type=int, help="record id (default: latest)")
     mp.add_argument("--last", action="store_true", help="latest record (default)")

@@ -145,6 +145,24 @@ def test_nearest_candidate_beats_relevance_order():
     assert best["name"] == "7 Seas Bistro"
 
 
+def test_parse_wifi():
+    out = "  SSID : CoffeeWiFi\n  BSSID : aa:bb:cc:dd:ee:ff\n  MTU : 1500\n"
+    w = wifidb.parse_wifi(out)
+    assert w["ssid"] == "CoffeeWiFi"
+    assert w["bssid"] == "aa:bb:cc:dd:ee:ff"
+
+
+def test_parse_wifi_bssid_not_read_as_ssid():
+    w = wifidb.parse_wifi("  BSSID : 11:22:33:44:55:66\n")
+    assert w["ssid"] is None
+    assert w["bssid"] == "11:22:33:44:55:66"
+
+
+def test_parse_wifi_empty():
+    w = wifidb.parse_wifi("")
+    assert w == {"ssid": None, "bssid": None}
+
+
 def test_parse_ipinfo():
     j = {"ip": "45.94.208.133", "city": "Lisbon", "region": "Lisbon",
          "country": "PT", "loc": "38.7167,-9.1333",
