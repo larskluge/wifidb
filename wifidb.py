@@ -600,7 +600,9 @@ def cmd_resolve(args):
 def cmd_list(args):
     conn = db_connect()
     if getattr(args, "raw", False):
-        _print_rows(conn, limit=getattr(args, "n", 15))
+        # fastest connection first (NULL downloads sort last under DESC)
+        _print_rows(conn, limit=getattr(args, "n", 15),
+                    order_by="download_mbps DESC", reverse=False)
     else:
         _print_groups(conn, limit=getattr(args, "n", 15))
     return 0
@@ -659,7 +661,7 @@ def _print_groups(conn, limit=15):
         FROM records
         GROUP BY COALESCE(NULLIF(place, ''), bssid,
                           'gps:' || ROUND(lat, 4) || ',' || ROUND(lon, 4))
-        ORDER BY last_ts DESC LIMIT ?
+        ORDER BY dl_avg DESC LIMIT ?
         """,
         (limit,),
     ).fetchall()
@@ -679,11 +681,14 @@ def _print_groups(conn, limit=15):
               f"{ping:>9} {vpn:>5} {last:<11}")
 
 
-def _print_rows(conn, where="1=1", params=(), limit=15):
+def _print_rows(conn, where="1=1", params=(), limit=15,
+                order_by="id DESC", reverse=True):
+    # `reverse` flips the fetched order for display: with the default id-DESC
+    # selection it prints the newest N oldest-first (newest at the bottom).
     sql = (
         "SELECT id, ts, place, address, lat, lon, download_mbps, upload_mbps, "
         "ping_ms, isp, is_vpn, exit_loc FROM records WHERE " + where +
-        " ORDER BY id DESC LIMIT ?"
+        " ORDER BY " + order_by + " LIMIT ?"
     )
     rows = conn.execute(sql, (*params, limit)).fetchall()
     if not rows:
@@ -691,7 +696,7 @@ def _print_rows(conn, where="1=1", params=(), limit=15):
         return
     print(f"{'id':>3} {'when':<16} {'place':<22} {'↓Mbps':>7} {'↑Mbps':>7} "
           f"{'ping':>5} {'vpn':>3} {'exit (where it connected)':<30}")
-    for r in reversed(rows):
+    for r in (reversed(rows) if reverse else rows):
         when = (r["ts"] or "")[:16].replace("T", " ")
         place = r["place"] or (r["address"] or "(pending)")
         vpn = "yes" if r["is_vpn"] else "no"

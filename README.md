@@ -42,9 +42,10 @@ Put `~/code/wifidb` on your PATH (or symlink `wifidb`) to run it anywhere.
   auto-pick the nearest. Nothing is lost if you skip the picker — name it later
   with `resolve`.
 - **list** — aggregates into **one entry per location**, keyed by place name
-  (falling back to BSSID, then a GPS cell). Shows count, avg/best speeds, ping
-  range, and the VPN split (e.g. `4/5` = four of five runs on VPN). `--raw` for
-  the full per-measurement table.
+  (falling back to BSSID, then a GPS cell), **ordered fastest first** by average
+  download speed. Shows count, avg/best speeds, ping range, and the VPN split
+  (e.g. `4/5` = four of five runs on VPN). `--raw` for the full per-measurement
+  table (also fastest first, by each measurement's download speed).
 - **resolve** `[--last|--all|<id>]` — names rows non-interactively by picking
   the venue **nearest** the fix from Google Maps. Mainly for backfilling rows
   recorded when the picker was skipped/unavailable. `--query <cat>` overrides
