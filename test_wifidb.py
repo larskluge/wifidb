@@ -62,6 +62,69 @@ def test_parse_location_collapses_whitespace():
     assert loc["address"] == "Rua A 2750 Cascais"
 
 
+class _FakeTime:
+    """Stand-in for the time module that records sleeps instead of waiting."""
+    def __init__(self):
+        self.slept = []
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+
+
+def _with_location_stub(once_fn):
+    """Run get_location with _location_once and time.sleep stubbed out.
+
+    Returns (result, fake_time) so tests can assert on retries/sleeps without
+    touching CoreLocation or wall-clock time.
+    """
+    fake_time = _FakeTime()
+    orig_once, orig_time = wifidb._location_once, wifidb.time
+    try:
+        wifidb._location_once, wifidb.time = once_fn, fake_time
+        result = wifidb.get_location(attempts=5, delay=3.0)
+    finally:
+        wifidb._location_once, wifidb.time = orig_once, orig_time
+    return result, fake_time
+
+
+def test_get_location_retries_then_succeeds():
+    calls = {"n": 0}
+    good = {"lat": 38.7, "lon": -9.4, "accuracy": 10.0, "address": "Rua A"}
+
+    def once():
+        calls["n"] += 1
+        return (good, None) if calls["n"] == 3 else (None, "no fix yet")
+
+    loc, ft = _with_location_stub(once)
+    assert loc == good
+    assert calls["n"] == 3            # stopped the moment it got a fix
+    assert ft.slept == [3.0, 3.0]     # slept only between the two failed tries
+
+
+def test_get_location_gives_up_after_attempts():
+    calls = {"n": 0}
+
+    def once():
+        calls["n"] += 1
+        return None, "kCLErrorDomain"
+
+    loc, ft = _with_location_stub(once)
+    assert loc == {"lat": None, "lon": None, "accuracy": None, "address": None}
+    assert calls["n"] == 5            # exhausted all attempts
+    assert ft.slept == [3.0, 3.0, 3.0, 3.0]   # no sleep after the final try
+
+
+def test_get_location_retries_when_exit_ok_but_no_fix():
+    # CoreLocationCLI can exit 0 yet yield no coordinates before it acquires.
+    empty = {"lat": None, "lon": None, "accuracy": None, "address": None}
+    good = {"lat": 1.0, "lon": 2.0, "accuracy": 5.0, "address": None}
+    seq = iter([(empty, None), (good, None)])
+
+    loc, ft = _with_location_stub(lambda: next(seq))
+    assert loc == good
+    assert ft.slept == [3.0]          # one retry after the empty fix
+
+
 SNAPSHOT = '''Page: specialty coffee - Google Maps
 - combobox [expanded=false, ref=e2]: specialty coffee
 - button "Pesquisar" [ref=e3]

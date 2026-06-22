@@ -330,18 +330,46 @@ def run_speedtest():
     raise RuntimeError("speedtest produced no JSON output")
 
 
-def get_location():
+def _location_once():
+    """Run CoreLocationCLI once.
+
+    Returns (loc_dict, None) when the process exits cleanly (the dict may still
+    have lat=None if it parsed nothing), or (None, err) when it exits non-zero.
+    """
     fmt = "%latitude|%longitude|%h_accuracy|%address"
     proc = subprocess.run(
         ["CoreLocationCLI", "--format", fmt],
         capture_output=True, text=True,
     )
     if proc.returncode != 0:
-        sys.stderr.write(
-            "warning: location unavailable (" + proc.stderr.strip() + ")\n"
-        )
-        return {"lat": None, "lon": None, "accuracy": None, "address": None}
-    return parse_location(proc.stdout)
+        return None, proc.stderr.strip()
+    return parse_location(proc.stdout), None
+
+
+def get_location(attempts=5, delay=3.0):
+    """Get a GPS fix, retrying a few times before giving up.
+
+    CoreLocationCLI exits non-zero (or returns no coordinates) while Location
+    Services is still acquiring — common on a cold start. Retrying a handful of
+    times keeps a transient miss from leaving the record location-less. After
+    the last attempt, return the all-None dict so the caller still saves the row.
+    """
+    last_err = "no fix"
+    for i in range(attempts):
+        loc, err = _location_once()
+        if loc and loc.get("lat") is not None:
+            return loc
+        last_err = err or "no fix yet"
+        if i < attempts - 1:
+            sys.stderr.write(
+                f"location attempt {i + 1}/{attempts} failed "
+                f"({last_err}); retrying in {delay:.0f}s…\n"
+            )
+            time.sleep(delay)
+    sys.stderr.write(
+        f"warning: location unavailable after {attempts} attempts ({last_err})\n"
+    )
+    return {"lat": None, "lon": None, "accuracy": None, "address": None}
 
 
 def geolocate_ip(ip, timeout=8):
