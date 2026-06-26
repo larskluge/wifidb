@@ -416,6 +416,46 @@ def rank_candidates(lat, lon, candidate_lists, limit=10):
     return sorted(by_key.values(), key=lambda c: c["dist"])[:limit]
 
 
+_CONSENT_LABELS = ["Aceitar tudo", "Accept all", "Rejeitar tudo", "Reject all"]
+
+
+def _on_consent_page():
+    """True when the browser is parked on Google's cookie-consent interstitial."""
+    return "consent.google.com" in _ab("get", "url")
+
+
+def _search_candidates(url, settle, attempts=4):
+    """Open a Maps search at `url`, clear the consent gate, return candidates.
+
+    Google re-shows the consent interstitial on essentially every cold browser
+    launch — it doesn't survive the `close --all` that `record` runs between
+    invocations — and on a cold start its first paint (or the results SPA's) can
+    lose the race against our snapshot. So re-open until we either land on a real
+    results page (place links present) or run out of attempts, dismissing consent
+    whenever it's in the way. Without this, the 2nd+ `record` of a session
+    snapshots the consent page (no places) or a half-centered map (far-away
+    places) instead of the venues at the fix.
+    """
+    cands = []
+    for _ in range(attempts):
+        _ab("open", url)
+        time.sleep(settle)
+        snap = _ab("snapshot", "-i", "-u")
+        if _on_consent_page() or find_ref(snap, _CONSENT_LABELS):
+            ref = find_ref(snap, _CONSENT_LABELS)
+            if not ref:                      # buttons not painted yet — let it
+                _ab("wait", "--load", "networkidle")
+                ref = find_ref(_ab("snapshot", "-i"), _CONSENT_LABELS)
+            if ref:
+                _ab("click", ref)
+                _ab("wait", "--load", "networkidle")
+            continue                         # re-open at the right coords, recheck
+        cands = parse_search_candidates(snap)
+        if cands:
+            break
+    return cands
+
+
 def fetch_candidates(lat, lon, queries=("cafe", "restaurant"), settle=3.0, limit=10):
     """Search Google Maps across categories near the fix; return nearest venues.
 
@@ -423,25 +463,11 @@ def fetch_candidates(lat, lon, queries=("cafe", "restaurant"), settle=3.0, limit
     whole candidate set comes from snapshots — no per-result clicking. Multiple
     categories are merged so cafés, bistros and restaurants all surface.
     """
-    lists = []
-    for i, q in enumerate(queries):
-        url = f"https://www.google.com/maps/search/{q}/@{lat},{lon},18z"
-        _ab("open", url)
-        time.sleep(settle)
-        snap = _ab("snapshot", "-i", "-u")
-        if i == 0 and ("consent.google.com" in _ab("get", "url")
-                       or find_ref(snap, ["Rejeitar tudo", "Reject all"])):
-            ref = find_ref(snap, ["Rejeitar tudo", "Reject all",
-                                  "Aceitar tudo", "Accept all"])
-            if ref:
-                _ab("click", ref)
-                time.sleep(settle)
-                _ab("wait", "--load", "networkidle")
-            _ab("open", url)
-            time.sleep(settle)
-            _ab("wait", "--load", "networkidle")
-            snap = _ab("snapshot", "-i", "-u")
-        lists.append(parse_search_candidates(snap))
+    lists = [
+        _search_candidates(
+            f"https://www.google.com/maps/search/{q}/@{lat},{lon},18z", settle)
+        for q in queries
+    ]
     return rank_candidates(lat, lon, lists, limit=limit)
 
 

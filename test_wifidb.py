@@ -222,6 +222,93 @@ def test_rank_candidates_dedupes_and_sorts():
     assert len(out) == 3
 
 
+RESULTS_SNAP = (
+    '- link "Nikoletta Ristorante" [ref=e30, url=https://www.google.com/maps/place/'
+    'Nikoletta/data=!8m2!3d38.692100!4d-9.418700!16s]\n'
+    '- link "The Coffee" [ref=e31, url=https://www.google.com/maps/place/'
+    'TheCoffee/data=!8m2!3d38.691900!4d-9.418600!16s]\n'
+)
+CONSENT_SNAP = '- button "Aceitar tudo" [ref=e11]\n- button "Rejeitar tudo" [ref=e12]\n'
+EMPTY_SNAP = "Page: Google Maps\n- combobox [ref=e2]: cafe\n"
+
+
+class _FakeAB:
+    """Scripted stand-in for wifidb._ab driving the consent/results state machine.
+
+    `script` lists the page each successive `open` lands on ("consent", "empty",
+    or "results"); past the end of the script every `open` lands on results. A
+    "consent" entry serves the consent page regardless of any click — that models
+    the cold-start race where one dismissal attempt doesn't take, which is what
+    the fix must survive.
+    """
+    def __init__(self, script):
+        self.script = list(script)
+        self.opens = 0
+        self.on_consent = False
+        self.cur = EMPTY_SNAP
+        self.clicks = 0
+
+    def __call__(self, *args):
+        cmd = args[0]
+        if cmd == "open":
+            page = self.script[self.opens] if self.opens < len(self.script) else "results"
+            self.opens += 1
+            self.on_consent = page == "consent"
+            self.cur = {"consent": CONSENT_SNAP, "empty": EMPTY_SNAP}.get(
+                page, RESULTS_SNAP)
+            return ""
+        if cmd == "snapshot":
+            return self.cur
+        if cmd == "get":                                  # ("get", "url")
+            return ("https://consent.google.com/m?continue=x" if self.on_consent
+                    else "https://www.google.com/maps/search/cafe/@1,2,18z")
+        if cmd == "click":
+            self.clicks += 1
+            return ""
+        return ""                                         # wait, close, …
+
+
+def _with_ab_stub(fake):
+    """Run fetch_candidates for one query with _ab and time.sleep stubbed out."""
+    orig_ab, orig_time = wifidb._ab, wifidb.time
+    try:
+        wifidb._ab, wifidb.time = fake, _FakeTime()
+        return wifidb.fetch_candidates(38.6921, -9.4187, queries=("cafe",))
+    finally:
+        wifidb._ab, wifidb.time = orig_ab, orig_time
+
+
+def test_fetch_candidates_clears_consent_and_recovers():
+    # Regression: on the 2nd+ `record`, the cold browser launch lands on Google's
+    # consent page, and on a cold start one dismissal attempt often doesn't take
+    # (the click races the page). Old code re-opened exactly once, so the snapshot
+    # stayed on the consent page → no/garbage candidates. The fix retries until
+    # the page actually leaves consent.
+    fake = _FakeAB(["consent", "consent"])
+    cands = _with_ab_stub(fake)
+    assert fake.clicks >= 1                                # consent was dismissed
+    assert [c["name"] for c in cands] == ["Nikoletta Ristorante", "The Coffee"]
+    assert cands[0]["dist"] < 20                           # actually near the fix
+
+
+def test_fetch_candidates_retries_cold_start_empty():
+    # Cold start: the results SPA hadn't painted place links on the first
+    # snapshot. Old code parsed the empty page once and returned []. The fix
+    # re-opens until real results appear.
+    fake = _FakeAB(["empty"])
+    cands = _with_ab_stub(fake)
+    assert [c["name"] for c in cands] == ["Nikoletta Ristorante", "The Coffee"]
+
+
+def test_fetch_candidates_no_consent_single_open():
+    # Happy path: results on the first try, no consent — one open, no clicks.
+    fake = _FakeAB([])
+    cands = _with_ab_stub(fake)
+    assert fake.opens == 1
+    assert fake.clicks == 0
+    assert len(cands) == 2
+
+
 def test_parse_wifi():
     out = "  SSID : CoffeeWiFi\n  BSSID : aa:bb:cc:dd:ee:ff\n  MTU : 1500\n"
     w = wifidb.parse_wifi(out)
