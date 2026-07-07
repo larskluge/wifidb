@@ -309,6 +309,18 @@ def test_fetch_candidates_no_consent_single_open():
     assert len(cands) == 2
 
 
+def test_default_queries_include_coworking():
+    # Regression: coworking spaces (e.g. Second Home) are prime Wi-Fi spots, but
+    # Google's category search only returns a venue under a matching query — a
+    # cafe/restaurant search never lists them. "coworking" must stay a default
+    # category, and fetch/resolve must keep defaulting to that shared set.
+    import inspect
+    assert "coworking" in wifidb.DEFAULT_QUERIES
+    for fn in (wifidb.fetch_candidates, wifidb.resolve_place):
+        default = inspect.signature(fn).parameters["queries"].default
+        assert default == wifidb.DEFAULT_QUERIES
+
+
 def test_parse_wifi():
     out = "  SSID : CoffeeWiFi\n  BSSID : aa:bb:cc:dd:ee:ff\n  MTU : 1500\n"
     w = wifidb.parse_wifi(out)

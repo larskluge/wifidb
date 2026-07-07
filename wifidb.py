@@ -416,6 +416,12 @@ def rank_candidates(lat, lon, candidate_lists, limit=10):
     return sorted(by_key.values(), key=lambda c: c["dist"])[:limit]
 
 
+# Google Maps categories searched to name a spot. Category search only returns
+# a venue under a matching query, so each place type a Wi-Fi spot might be needs
+# its own term: "coworking" surfaces coworking spaces (e.g. Second Home) that a
+# cafe/restaurant search never lists.
+DEFAULT_QUERIES = ("cafe", "restaurant", "coworking")
+
 _CONSENT_LABELS = ["Aceitar tudo", "Accept all", "Rejeitar tudo", "Reject all"]
 
 
@@ -456,7 +462,7 @@ def _search_candidates(url, settle, attempts=4):
     return cands
 
 
-def fetch_candidates(lat, lon, queries=("cafe", "restaurant"), settle=3.0, limit=10):
+def fetch_candidates(lat, lon, queries=DEFAULT_QUERIES, settle=3.0, limit=10):
     """Search Google Maps across categories near the fix; return nearest venues.
 
     Coordinates are read straight from each result's place-link href, so the
@@ -471,7 +477,7 @@ def fetch_candidates(lat, lon, queries=("cafe", "restaurant"), settle=3.0, limit
     return rank_candidates(lat, lon, lists, limit=limit)
 
 
-def resolve_place(lat, lon, queries=("cafe", "restaurant")):
+def resolve_place(lat, lon, queries=DEFAULT_QUERIES):
     """Auto-pick the venue nearest the coords (non-interactive)."""
     cands = fetch_candidates(lat, lon, queries=queries)
     if not cands:
@@ -630,7 +636,7 @@ def cmd_resolve(args):
             sys.stderr.write(f"#{rid}: no coordinates, skipping.\n")
             continue
         sys.stderr.write(f"#{rid}: resolving via Google Maps…\n")
-        qs = (args.query,) if getattr(args, "query", None) else ("cafe", "restaurant")
+        qs = (args.query,) if getattr(args, "query", None) else DEFAULT_QUERIES
         try:
             res = resolve_place(row["lat"], row["lon"], queries=qs)
         except Exception as e:  # noqa: BLE001 - best-effort browser step
@@ -769,7 +775,8 @@ def build_parser():
     rs.add_argument("--last", action="store_true", help="resolve the latest record (default)")
     rs.add_argument("--all", action="store_true", help="resolve all pending records")
     rs.add_argument("--query", default=None,
-                    help="single Google Maps category to search (default: cafe + restaurant)")
+                    help="single Google Maps category to search "
+                         "(default: cafe + restaurant + coworking)")
     ls = sub.add_parser("list", aliases=["ls"], help="show records grouped by Wi-Fi")
     ls.add_argument("-n", type=int, default=15, help="how many rows/groups")
     ls.add_argument("--raw", action="store_true",
