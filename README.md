@@ -43,19 +43,19 @@ Put `~/code/wifidb` on your PATH (or symlink `wifidb`) to run it anywhere.
   auto-pick the nearest. Nothing is lost if you skip the picker — name it later
   with `resolve`.
 - **list** — aggregates into **one entry per location**, keyed by place name
-  (falling back to BSSID, then a GPS cell), **ordered most-recently-recorded
-  first**. Shows count, avg/best speeds, ping range, and the VPN split
+  (falling back to BSSID, then a GPS cell), **ordered fastest first** by average
+  download speed. Shows count, avg/best speeds, ping range, and the VPN split
   (e.g. `4/5` = four of five runs on VPN). `--raw` for the full per-measurement
-  table (fastest first, by each measurement's download speed).
+  table (also fastest first, by each measurement's download speed).
 - **resolve** `[--last|--all|<id>]` — names rows non-interactively by picking
   the venue **nearest** the fix from Google Maps. Mainly for backfilling rows
   recorded when the picker was skipped/unavailable. `--query <cat>` overrides
   the default `cafe`+`restaurant` search.
 - **delete** (aliases `del`, `rm`, `remove`) — shows the grouped list as an
-  **arrow-key picker**; ↑/↓ to a spot, **Enter deletes it** — *every*
-  measurement grouped under it — immediately (no confirmation), Esc/Ctrl-C
-  cancels. Refuses to run outside an interactive terminal so a piped/redirected
-  invocation never deletes anything.
+  **arrow-key picker**, **most-recently-recorded first**; ↑/↓ to a spot,
+  **Enter deletes it** — *every* measurement grouped under it — immediately (no
+  confirmation), Esc/Ctrl-C cancels. Refuses to run outside an interactive
+  terminal so a piped/redirected invocation never deletes anything.
 
 Note: macOS only discloses the Wi-Fi `ssid`/`bssid` to processes authorized for
 Location Services, so an unprivileged CLI gets `<redacted>` — those are stored

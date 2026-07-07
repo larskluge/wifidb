@@ -400,17 +400,31 @@ def test_db_insert_list_stats():
         assert stats["n"] == 1
 
 
-def test_grouped_orders_recent_first():
-    # The delete picker and `list` share _grouped; it must return spots ordered
-    # by their most recent measurement (pins the list-sort behaviour too).
+def _two_spots(conn):
+    # "Fast" is quick but old; "Slow" is sluggish but recent — so the two
+    # orderings disagree and each test pins a distinct sort.
+    wifidb.insert_record(conn, {"place": "Fast", "download_mbps": 99,
+                                "ts": "2026-01-01T00:00:00Z"})
+    wifidb.insert_record(conn, {"place": "Slow", "download_mbps": 1,
+                                "ts": "2026-06-01T00:00:00Z"})
+
+
+def test_grouped_default_orders_fastest_first():
+    # The default list view sorts fastest-download first.
     with tempfile.TemporaryDirectory() as d:
         conn = wifidb.db_connect(os.path.join(d, "t.db"))
-        wifidb.insert_record(conn, {"place": "Old", "download_mbps": 99,
-                                    "ts": "2026-01-01T00:00:00Z"})
-        wifidb.insert_record(conn, {"place": "New", "download_mbps": 1,
-                                    "ts": "2026-06-01T00:00:00Z"})
+        _two_spots(conn)
         groups = wifidb._grouped(conn, limit=15)
-        assert [g["place"] for g in groups] == ["New", "Old"]
+        assert [g["place"] for g in groups] == ["Fast", "Slow"]
+
+
+def test_grouped_recent_first_for_delete():
+    # The delete picker asks for most-recently-recorded first.
+    with tempfile.TemporaryDirectory() as d:
+        conn = wifidb.db_connect(os.path.join(d, "t.db"))
+        _two_spots(conn)
+        groups = wifidb._grouped(conn, limit=15, order_by="last_ts DESC")
+        assert [g["place"] for g in groups] == ["Slow", "Fast"]
 
 
 def test_delete_group_removes_whole_spot():

@@ -712,7 +712,7 @@ def cmd_stats(args):
 
 def cmd_delete(args):
     conn = db_connect()
-    groups = _grouped(conn, limit=args.n)
+    groups = _grouped(conn, limit=args.n, order_by="last_ts DESC")
     if not groups:
         print("(no records)")
         return 0
@@ -743,11 +743,14 @@ _GROUP_HEADER = (f"{'place':<30} {'n':>2} {'↓avg':>6} {'↓best':>6} "
                  f"{'↑avg':>6} {'ping':>9} {'vpn':>5} {'last':<11}")
 
 
-def _grouped(conn, limit=15):
-    """Rows for the per-spot aggregated view, most-recently-recorded spot first.
+def _grouped(conn, limit=15, order_by="dl_avg DESC"):
+    """Rows for the per-spot aggregated view.
 
-    Each row carries `gkey` — the grouping key — so a caller (the delete picker)
-    can remove exactly the spot it displays."""
+    `order_by` (a trusted column expression, never user input) picks the sort:
+    the list defaults to fastest-download first; the delete picker passes
+    'last_ts DESC' for most-recently-recorded first. Each row carries `gkey` —
+    the grouping key — so a caller (the delete picker) can remove exactly the
+    spot it displays."""
     return conn.execute(
         f"""
         SELECT {_GROUP_KEY_SQL} gkey,
@@ -759,7 +762,7 @@ def _grouped(conn, limit=15):
                SUM(is_vpn) vpn_n, MAX(ts) last_ts
         FROM records
         GROUP BY {_GROUP_KEY_SQL}
-        ORDER BY last_ts DESC LIMIT ?
+        ORDER BY {order_by} LIMIT ?
         """,
         (limit,),
     ).fetchall()
