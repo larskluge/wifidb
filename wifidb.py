@@ -700,7 +700,9 @@ def cmd_stats(args):
     if not rows:
         print("no records yet.")
         return 0
-    print(f"{'place':<30} {'n':>3} {'avg↓':>8} {'avg↑':>8} {'ping':>6}")
+    header = f"{'place':<30} {'n':>3} {'avg↓':>8} {'avg↑':>8} {'ping':>6}"
+    print(header)
+    print("─" * len(header))
     for r in rows:
         print(f"{(r['place'] or '')[:30]:<30} {r['n']:>3} "
               f"{r['dl'] or 0:>8} {r['ul'] or 0:>8} {r['ping'] or 0:>6}")
@@ -728,8 +730,10 @@ def _print_groups(conn, limit=15):
     if not rows:
         print("(no records)")
         return
-    print(f"{'place':<30} {'n':>2} {'↓avg':>6} {'↓best':>6} "
-          f"{'↑avg':>6} {'ping':>9} {'vpn':>5} {'last':<11}")
+    header = (f"{'place':<30} {'n':>2} {'↓avg':>6} {'↓best':>6} "
+              f"{'↑avg':>6} {'ping':>9} {'vpn':>5} {'last':<11}")
+    print(header)
+    print("─" * len(header))
     for r in rows:
         place = r["place"] or r["address"] or "(pending)"
         pmin, pmax = r["ping_min"] or 0, r["ping_max"] or 0
@@ -754,8 +758,10 @@ def _print_rows(conn, where="1=1", params=(), limit=15,
     if not rows:
         print("(no records)")
         return
-    print(f"{'id':>3} {'when':<16} {'place':<22} {'↓Mbps':>7} {'↑Mbps':>7} "
-          f"{'ping':>5} {'vpn':>3} {'exit (where it connected)':<30}")
+    header = (f"{'id':>3} {'when':<16} {'place':<22} {'↓Mbps':>7} {'↑Mbps':>7} "
+              f"{'ping':>5} {'vpn':>3} {'exit (where it connected)':<30}")
+    print(header)
+    print("─" * len(header))
     for r in (reversed(rows) if reverse else rows):
         when = (r["ts"] or "")[:16].replace("T", " ")
         place = r["place"] or (r["address"] or "(pending)")
