@@ -728,7 +728,6 @@ def cmd_delete(args):
     n = delete_group(conn, choice["gkey"])
     spot = choice["place"] or choice["address"] or "(pending)"
     sys.stderr.write(f"deleted {spot} — {n} measurement{'' if n == 1 else 's'}.\n")
-    _print_groups(conn)
     return 0
 
 
