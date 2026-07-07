@@ -400,6 +400,64 @@ def test_db_insert_list_stats():
         assert stats["n"] == 1
 
 
+def test_grouped_orders_recent_first():
+    # The delete picker and `list` share _grouped; it must return spots ordered
+    # by their most recent measurement (pins the list-sort behaviour too).
+    with tempfile.TemporaryDirectory() as d:
+        conn = wifidb.db_connect(os.path.join(d, "t.db"))
+        wifidb.insert_record(conn, {"place": "Old", "download_mbps": 99,
+                                    "ts": "2026-01-01T00:00:00Z"})
+        wifidb.insert_record(conn, {"place": "New", "download_mbps": 1,
+                                    "ts": "2026-06-01T00:00:00Z"})
+        groups = wifidb._grouped(conn, limit=15)
+        assert [g["place"] for g in groups] == ["New", "Old"]
+
+
+def test_delete_group_removes_whole_spot():
+    # Deleting a spot removes every measurement grouped under it, leaving other
+    # spots untouched, and returns how many rows went.
+    with tempfile.TemporaryDirectory() as d:
+        conn = wifidb.db_connect(os.path.join(d, "t.db"))
+        for dl in (10, 11, 12):
+            wifidb.insert_record(conn, {"place": "Cafe A", "download_mbps": dl})
+        wifidb.insert_record(conn, {"place": "Cafe B", "download_mbps": 20})
+        removed = wifidb.delete_group(conn, "Cafe A")
+        assert removed == 3
+        assert [r["place"] for r in conn.execute("SELECT place FROM records")] == ["Cafe B"]
+
+
+def test_delete_group_null_key():
+    # Records with no place/BSSID/coords group under a NULL key; they must still
+    # be deletable (IS NULL, not = NULL).
+    with tempfile.TemporaryDirectory() as d:
+        conn = wifidb.db_connect(os.path.join(d, "t.db"))
+        wifidb.insert_record(conn, {"download_mbps": 5})
+        wifidb.insert_record(conn, {"download_mbps": 6})
+        wifidb.insert_record(conn, {"place": "Somewhere", "download_mbps": 7})
+        removed = wifidb.delete_group(conn, None)
+        assert removed == 2
+        assert [r["place"] for r in conn.execute("SELECT place FROM records")] == ["Somewhere"]
+
+
+def test_grouped_key_matches_delete():
+    # The gkey shown for each group deletes exactly that group's measurements —
+    # what you see in the picker is what Enter removes.
+    with tempfile.TemporaryDirectory() as d:
+        conn = wifidb.db_connect(os.path.join(d, "t.db"))
+        wifidb.insert_record(conn, {"place": "Cafe A", "download_mbps": 10,
+                                    "ts": "2026-01-02T00:00:00Z"})
+        wifidb.insert_record(conn, {"place": "Cafe A", "download_mbps": 12,
+                                    "ts": "2026-01-03T00:00:00Z"})
+        wifidb.insert_record(conn, {"bssid": "aa:bb:cc", "download_mbps": 20,
+                                    "ts": "2026-01-01T00:00:00Z"})
+        groups = wifidb._grouped(conn, limit=15)
+        by_key = {g["gkey"]: g["n"] for g in groups}
+        assert by_key["Cafe A"] == 2
+        removed = wifidb.delete_group(conn, "Cafe A")
+        assert removed == 2
+        assert conn.execute("SELECT COUNT(*) c FROM records").fetchone()["c"] == 1
+
+
 if __name__ == "__main__":
     # Runs without pytest: `python3 test_wifidb.py`
     import traceback

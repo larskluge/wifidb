@@ -7,6 +7,7 @@ Subcommands:
   list     show recent records
   map      open a record's location in Google Maps
   stats    average speeds grouped by place
+  delete   remove a spot (all its measurements) via an arrow-key picker
 """
 import argparse
 import json
@@ -709,40 +710,142 @@ def cmd_stats(args):
     return 0
 
 
-def _print_groups(conn, limit=15):
-    """One aggregated entry per location: by place name, else Wi-Fi BSSID, else
-    a coarse GPS cell. So all measurements at a named spot collapse together."""
-    rows = conn.execute(
-        """
-        SELECT MAX(bssid) bssid, MAX(ssid) ssid, COUNT(*) n,
+def cmd_delete(args):
+    conn = db_connect()
+    groups = _grouped(conn, limit=args.n)
+    if not groups:
+        print("(no records)")
+        return 0
+    # Irreversible with no confirm step, so never delete outside an interactive
+    # terminal — a piped/redirected run refuses rather than auto-deleting.
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        sys.stderr.write("delete needs an interactive terminal.\n")
+        return 1
+    choice = _select_group(groups)
+    if not choice:
+        sys.stderr.write("cancelled — nothing deleted.\n")
+        return 0
+    n = delete_group(conn, choice["gkey"])
+    spot = choice["place"] or choice["address"] or "(pending)"
+    sys.stderr.write(f"deleted {spot} — {n} measurement{'' if n == 1 else 's'}.\n")
+    _print_groups(conn)
+    return 0
+
+
+# The key that collapses measurements into one "spot": place name, else the
+# Wi-Fi BSSID, else a coarse GPS cell. Defined once so the grouped view and
+# `delete` group on — and delete by — exactly the same expression.
+_GROUP_KEY_SQL = (
+    "COALESCE(NULLIF(place, ''), bssid, "
+    "'gps:' || ROUND(lat, 4) || ',' || ROUND(lon, 4))"
+)
+
+_GROUP_HEADER = (f"{'place':<30} {'n':>2} {'↓avg':>6} {'↓best':>6} "
+                 f"{'↑avg':>6} {'ping':>9} {'vpn':>5} {'last':<11}")
+
+
+def _grouped(conn, limit=15):
+    """Rows for the per-spot aggregated view, most-recently-recorded spot first.
+
+    Each row carries `gkey` — the grouping key — so a caller (the delete picker)
+    can remove exactly the spot it displays."""
+    return conn.execute(
+        f"""
+        SELECT {_GROUP_KEY_SQL} gkey,
+               MAX(bssid) bssid, MAX(ssid) ssid, COUNT(*) n,
                MAX(place) place, MAX(address) address,
                ROUND(AVG(download_mbps),1) dl_avg, ROUND(MAX(download_mbps),1) dl_best,
                ROUND(AVG(upload_mbps),1) ul_avg,
                ROUND(MIN(ping_ms)) ping_min, ROUND(MAX(ping_ms)) ping_max,
                SUM(is_vpn) vpn_n, MAX(ts) last_ts
         FROM records
-        GROUP BY COALESCE(NULLIF(place, ''), bssid,
-                          'gps:' || ROUND(lat, 4) || ',' || ROUND(lon, 4))
+        GROUP BY {_GROUP_KEY_SQL}
         ORDER BY last_ts DESC LIMIT ?
         """,
         (limit,),
     ).fetchall()
+
+
+def _fmt_group(r):
+    """Format one grouped row into its display line (no leading marker)."""
+    place = r["place"] or r["address"] or "(pending)"
+    pmin, pmax = r["ping_min"] or 0, r["ping_max"] or 0
+    ping = f"{pmin:.0f}" if pmin == pmax else f"{pmin:.0f}–{pmax:.0f}"
+    vpn = f"{r['vpn_n']}/{r['n']}"
+    last = (r["last_ts"] or "")[5:16].replace("T", " ")
+    return (f"{place[:30]:<30} {r['n']:>2} "
+            f"{r['dl_avg'] or 0:>6} {r['dl_best'] or 0:>6} {r['ul_avg'] or 0:>6} "
+            f"{ping:>9} {vpn:>5} {last:<11}")
+
+
+def delete_group(conn, gkey):
+    """Delete every measurement in the spot keyed by `gkey`; return the count.
+
+    Uses `IS` (null-safe) so the spot of records with no place/BSSID/coords —
+    whose key is NULL — is deletable too."""
+    cur = conn.execute(f"DELETE FROM records WHERE {_GROUP_KEY_SQL} IS ?", (gkey,))
+    conn.commit()
+    return cur.rowcount
+
+
+def _print_groups(conn, limit=15):
+    """One aggregated entry per location: by place name, else Wi-Fi BSSID, else
+    a coarse GPS cell. So all measurements at a named spot collapse together."""
+    rows = _grouped(conn, limit)
     if not rows:
         print("(no records)")
         return
-    header = (f"{'place':<30} {'n':>2} {'↓avg':>6} {'↓best':>6} "
-              f"{'↑avg':>6} {'ping':>9} {'vpn':>5} {'last':<11}")
-    print(header)
-    print("─" * len(header))
+    print(_GROUP_HEADER)
+    print("─" * len(_GROUP_HEADER))
     for r in rows:
-        place = r["place"] or r["address"] or "(pending)"
-        pmin, pmax = r["ping_min"] or 0, r["ping_max"] or 0
-        ping = f"{pmin:.0f}" if pmin == pmax else f"{pmin:.0f}–{pmax:.0f}"
-        vpn = f"{r['vpn_n']}/{r['n']}"
-        last = (r["last_ts"] or "")[5:16].replace("T", " ")
-        print(f"{place[:30]:<30} {r['n']:>2} "
-              f"{r['dl_avg'] or 0:>6} {r['dl_best'] or 0:>6} {r['ul_avg'] or 0:>6} "
-              f"{ping:>9} {vpn:>5} {last:<11}")
+        print(_fmt_group(r))
+
+
+def _render_groups(groups, idx):
+    w = sys.stdout
+    w.write("\x1b[2KDelete which spot?  ↑/↓ move · Enter delete · Esc cancel\r\n")
+    w.write(f"\x1b[2K   {_GROUP_HEADER}\r\n")
+    for i, g in enumerate(groups):
+        marker = "❯" if i == idx else " "
+        w.write(f"\x1b[2K {marker} {_fmt_group(g)}\r\n")
+    w.flush()
+
+
+def _select_group(groups):
+    """Arrow-key picker over spots; Enter returns the highlighted one to delete.
+
+    Returns the chosen group row, or None if cancelled (Esc / Ctrl-C). The caller
+    guarantees a TTY and a non-empty list."""
+    import termios
+    import tty
+    idx, first = 0, True
+    nlines = len(groups) + 2          # instruction + header + one row per spot
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            if not first:
+                sys.stdout.write(f"\x1b[{nlines}A")
+            first = False
+            _render_groups(groups, idx)
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"):
+                return groups[idx]
+            if ch == "\x03":              # Ctrl-C
+                return None
+            if ch == "\x1b":              # arrow keys / bare ESC
+                seq = sys.stdin.read(2)
+                if seq == "[A":
+                    idx = (idx - 1) % len(groups)
+                elif seq == "[B":
+                    idx = (idx + 1) % len(groups)
+                else:
+                    return None           # bare ESC aborts
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
 
 
 def _print_rows(conn, where="1=1", params=(), limit=15,
@@ -791,6 +894,9 @@ def build_parser():
     mp.add_argument("id", nargs="?", type=int, help="record id (default: latest)")
     mp.add_argument("--last", action="store_true", help="latest record (default)")
     sub.add_parser("stats", help="average speeds grouped by place")
+    dl = sub.add_parser("delete", aliases=["del", "rm", "remove"],
+                        help="delete a spot (all its measurements) via a picker")
+    dl.add_argument("-n", type=int, default=15, help="how many spots to choose from")
     return p
 
 
@@ -804,6 +910,10 @@ def main(argv=None):
         "ls": cmd_list,
         "map": cmd_map,
         "stats": cmd_stats,
+        "delete": cmd_delete,
+        "del": cmd_delete,
+        "rm": cmd_delete,
+        "remove": cmd_delete,
     }[cmd](args)
 
 

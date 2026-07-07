@@ -25,6 +25,7 @@ Location Services).
 ./wifidb resolve --last    # (re-)name a row non-interactively (auto-nearest)
 ./wifidb map --last        # open the latest spot's pin in Google Maps
 ./wifidb stats             # average speeds grouped by place
+./wifidb delete            # pick a spot with ↑/↓, Enter to delete it
 ```
 
 Put `~/code/wifidb` on your PATH (or symlink `wifidb`) to run it anywhere.
@@ -50,6 +51,11 @@ Put `~/code/wifidb` on your PATH (or symlink `wifidb`) to run it anywhere.
   the venue **nearest** the fix from Google Maps. Mainly for backfilling rows
   recorded when the picker was skipped/unavailable. `--query <cat>` overrides
   the default `cafe`+`restaurant` search.
+- **delete** (aliases `del`, `rm`, `remove`) — shows the grouped list as an
+  **arrow-key picker**; ↑/↓ to a spot, **Enter deletes it** — *every*
+  measurement grouped under it — immediately (no confirmation), Esc/Ctrl-C
+  cancels. Refuses to run outside an interactive terminal so a piped/redirected
+  invocation never deletes anything.
 
 Note: macOS only discloses the Wi-Fi `ssid`/`bssid` to processes authorized for
 Location Services, so an unprivileged CLI gets `<redacted>` — those are stored
