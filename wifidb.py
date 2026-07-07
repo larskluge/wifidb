@@ -723,7 +723,7 @@ def _print_groups(conn, limit=15):
         FROM records
         GROUP BY COALESCE(NULLIF(place, ''), bssid,
                           'gps:' || ROUND(lat, 4) || ',' || ROUND(lon, 4))
-        ORDER BY dl_avg DESC LIMIT ?
+        ORDER BY last_ts DESC LIMIT ?
         """,
         (limit,),
     ).fetchall()
